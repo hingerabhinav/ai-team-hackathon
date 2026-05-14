@@ -108,6 +108,24 @@ The "Active" MCP is the differentiator. Other AI approval agents only have read-
 - Attribution computed as `feature_value * coefficient` per feature, ranked top-3 — SHAP-style without the SHAP library.
 - Re-trainable in <1s on the seeded dataset so we can show the model updating live during demo.
 
+### 4.8 Slack notification output (V2 / optional for demo)
+- **Closes the loop:** agent *reads* Slack context as input (mentioned in original pitch), now *writes* verdict summaries back to Slack as output.
+- **Config:** opt-in per approval step. Example:
+  ```yaml
+  approval_step:
+    ai_agent: true
+    notify_slack:
+      channel: "#prod-deploys"
+      on: ["APPROVE_WITH_CONDITIONS", "REJECT", "NEEDS_HUMAN"]  # skip routine approves
+  ```
+- **Payload:** Slack Block Kit message with verdict badge, rollback probability, top risk factors, "View full evidence →" link to Harness UI.
+- **Value props:**
+  - Async visibility — team members see what happened without switching to Harness
+  - Audit trail in team space — searchable history of verdicts where incidents are discussed
+  - Reduces "what did the AI decide?" follow-up questions
+- **Build cost:** ~2 hours (Slack webhook + Block Kit formatter). Only build if Day 2 goes well.
+- **Demo treatment:** skip in live demo (4-min script is tight), but show a **screenshot on Slide 8 (V2/vision)** with 10-second mention: *"And the verdict posts to your team channel automatically — no one needs to ask 'did it approve?'"*
+
 ---
 
 ## 5. Demo Script (LOCKED — 4 min target)
@@ -190,6 +208,7 @@ The "Active" MCP is the differentiator. Other AI approval agents only have read-
 - Fleet Coordinator (cross-pipeline collision)
 - Real OTel-driven blast graph
 - Real security scanner / observability integrations
+- Slack notification output (only build if Day 2 schedule allows; otherwise screenshot-only on Slide 8)
 
 ---
 
@@ -242,10 +261,11 @@ The "Active" MCP is the differentiator. Other AI approval agents only have read-
 - Sub-caption: "GitHub/Atlassian/ChatGPT cannot draw this chart. They don't have the data."
 
 ### Slide 8 — V2 / vision (6:45–7:15)
-- Three logos teased:
+- Four items teased:
   - **Active gap-fillers** (rollback rehearsal, canary plan generation)
   - **Fleet Coordinator** (cross-pipeline collision detection)
   - **Org-wide trust score** (services earn auto-approve eligibility through track record)
+  - **Slack loop-closure** — screenshot of a Slack Block Kit message showing verdict posted to `#prod-deploys`. Caption: *"The verdict posts to your team channel automatically — no one needs to ask 'did it approve?'"*
 - "The agent gets smarter every deploy. The platform gets safer every approval."
 
 ### Slide 9 — Why this matters to a Harness customer (7:15–7:45)
