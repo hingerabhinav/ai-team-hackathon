@@ -1,0 +1,218 @@
+template:
+  inputs:
+    execution_id:
+      type: string
+      label: Failed Execution ID
+      ui:
+        tooltip: Enter the Harness execution ID of the failed pipeline run to remediate. Leave empty to use $HARNESS_EXECUTION_ID from the runtime env.
+        placeholder: Execution ID
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    source_pipeline_id:
+      type: string
+      label: Source Pipeline ID
+      ui:
+        tooltip: Enter the Harness pipeline identifier that contains the failed execution. Leave empty to use $HARNESS_PIPELINE_ID from the runtime env.
+        placeholder: Pipeline ID
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    repo:
+      type: string
+      label: Repository
+      ui:
+        tooltip: Enter the repository identifier (org/repo for GitHub-style SCMs, or full repo path for Harness Code). Leave empty to derive from the runtime SCM env vars (e.g. $DRONE_REPO_LINK) when a clone-codebase step ran in the pipeline.
+        placeholder: org/repo
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    llm_connector:
+      type: connector
+      label: LLM Connector
+      required: true
+      ui:
+        tooltip: Select the LLM connector used by the harness-ai-agent (Anthropic / Bedrock).
+        placeholder: Select LLM Connector
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    model_name:
+      type: string
+      label: Model Name
+      required: true
+      ui:
+        tooltip: Enter the Anthropic / Bedrock model identifier or inference-profile ARN.
+        placeholder: arn:aws:bedrock:us-east-1::application-inference-profile/...
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    mcp_connectors:
+      type: array
+      label: MCP Connectors
+      ui:
+        component: array
+        input:
+          inputType: connector
+        tooltip: Specify a list of MCP connector refs to mount (e.g. Harness Code MCP, GitHub MCP) used for SCM operations like opening pull requests.
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    branch:
+      type: string
+      label: Base Branch
+      ui:
+        tooltip: Enter the branch to base the fix on and target with the pull request. Leave empty to use $DRONE_TARGET_BRANCH (else $DRONE_BRANCH) from the runtime env.
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+  layout:
+    - llm_connector
+    - model_name
+    - variant: more
+      items:
+        - mcp_connectors
+        - execution_id
+        - source_pipeline_id
+        - repo
+        - branch
+  id: autofixAgent
+  name: Autofix Agent
+  description: AI agent that identifies the root cause of CI pipeline failures, fixes the code, and raises a pull request.
+  version: 1
+  author: harness
+  agent:
+    group:
+      steps:
+        - name: Run Autofix Agent
+          if: <+Always>
+          id: runAutofixAgent
+          run:
+            container:
+              image: pkg.harness.io/vrvdt5ius7uwygso8s0bia/harness-agents/harness-ai-agent:latest
+            env:
+              ANTHROPIC_MODEL: ${{inputs.model_name}}
+              PLUGIN_HARNESS_CONNECTOR: ${{inputs.llm_connector.id}}
+            with:
+              max_turns: 150
+              mcp_format: harness
+              mcp_servers: <+connectorInputs.resolveList(<+inputs.mcp_connectors>)>
+              task: |
+                You are the Harness Autofix agent. A CI pipeline has failed in
+                Harness and your job is to identify the root cause, fix it in code,
+                and raise a pull request with the fix.
+
+                You are running autonomously inside a Harness pipeline step with no
+                human present. Complete all steps end-to-end without asking for
+                confirmation or input.
+
+                Tooling notes:
+                - Inspect the configured MCP servers and the tools they expose, and
+                  use the right one for each operation (Harness platform calls, SCM
+                  operations, etc.).
+                - The CI runtime injects context as env vars. Read these first and
+                  use them when calling MCP tools — do not hardcode, do not invent
+                  values.
+                  Always present:
+                    Account / org / project: $HARNESS_ACCOUNT_ID, $HARNESS_ORG_ID,
+                                             $HARNESS_PROJECT_ID
+                    Execution / pipeline:    $HARNESS_EXECUTION_ID,
+                                             $HARNESS_PIPELINE_ID
+                    Working dir:             $HARNESS_WORKSPACE
+                    Service endpoints:       $HARNESS_TI_SERVICE_ENDPOINT, etc.
+                                             (any of these can be used to derive
+                                             the base URL — extract scheme + host)
+                  Only when the pipeline included a "clone codebase" step (repo
+                  cloned into /harness):
+                    Repo / branch / SCM:     $DRONE_REPO_NAME, $DRONE_REPO_LINK,
+                                             $DRONE_REMOTE_URL, $DRONE_REPO_SCM,
+                                             $DRONE_BRANCH, $DRONE_TARGET_BRANCH
+                  Resolution rule: prefer the template input; else the matching env
+                  var; else fetch via the appropriate MCP tool (e.g. fetch repo /
+                  branch from execution metadata when no clone step ran). Never
+                  guess or fabricate values.
+                - Prefer MCP tools over direct HTTP / curl / SDK calls; fall back to
+                  those only when no suitable MCP tool exists.
+                - The default workspace is /harness — check there first; the
+                  repository is usually already cloned at /harness by the CI
+                  step. If /harness is empty or not writable, fall back to the
+                  $HARNESS_WORKSPACE env var (the runtime sets it to the actual
+                  workspace path) or determine the workspace yourself. Clone
+                  explicitly only when the repo is missing.
+
+                Steps to perform:
+                1. Resolve required context per the resolution rule in Tooling
+                   notes. Fail with a precise message if no source has the
+                   value. Record the resolved values and use them in every
+                   subsequent step:
+                      execution_id       → ${{inputs.execution_id}} (else $HARNESS_EXECUTION_ID)
+                      source_pipeline_id → ${{inputs.source_pipeline_id}} (else $HARNESS_PIPELINE_ID)
+                      account_id         → $HARNESS_ACCOUNT_ID
+                      org_id             → $HARNESS_ORG_ID
+                      project_id         → $HARNESS_PROJECT_ID
+                      repo               → ${{inputs.repo}}
+                                           (else $DRONE_REPO_NAME, browse URL
+                                           $DRONE_REPO_LINK, if a clone step
+                                           ran; else fetch from execution
+                                           metadata via MCP)
+                      repo_clone_url     → $DRONE_REMOTE_URL (use this for
+                                           `git clone`) if available; otherwise
+                                           from execution metadata via MCP
+                      scm_provider       → $DRONE_REPO_SCM (else from execution
+                                           metadata via MCP)
+                      base_branch        → ${{inputs.branch}}
+                                           (else $DRONE_TARGET_BRANCH; else
+                                           $DRONE_BRANCH; else from execution
+                                           metadata via MCP)
+                   Use the configured MCP tools (with these resolved values) to
+                   fetch the execution details and step logs for the resolved
+                   execution_id under the resolved pipeline. Identify which stage
+                   and step failed, the failing command, and the error output.
+                2. Verify the repo is at the resolved workspace. If missing,
+                   clone it via the SCM MCP connector or
+                   `git clone <resolved-repo-clone-url>` via Bash (with
+                   credentials from the SCM connector context). Then check
+                   out the resolved base_branch.
+                3. Inspect the cloned codebase thoroughly. Use Read, Glob, and
+                   Grep liberally to gain full context for the failure before
+                   editing — never assume file contents you have not read.
+                4. Apply the smallest, most targeted fix that resolves the root
+                   cause. Do not refactor unrelated code. Do not introduce
+                   speculative changes.
+                5. Verify the fix:
+                      - Run the linters, type-checkers, and build commands the
+                        repo defines (e.g. `npm run lint`, `tsc --noEmit`,
+                        `npm run build`, `go build ./...`, `pytest`) — only the
+                        ones present in the repo. Fix any errors they report.
+                      - Run the test suite if one exists. Fix any failures your
+                        change introduces. Do NOT proceed until all checks pass.
+                6. Confirm the changes:
+                      - Use the SCM MCP connector's diff / file-change tools first.
+                      - Fall back to `git diff HEAD` via Bash when unavailable.
+                      - The diff must contain only the targeted fix.
+                7. Create a new branch, commit, and push using the SCM MCP
+                   connector's branch / commit / push tools. Branch name:
+                   `<resolved-base-branch>-ai-autofix/<resolved-execution-id>`.
+                   Commit message: `Autofix: harness-auto-fix created this fix`.
+                   Fall back to Bash (`git checkout -b`, `git commit`,
+                   `git push --force-with-lease`) if the connector does not
+                   support these operations.
+                8. Open a pull request via the SCM MCP connector from the new
+                   branch back to the resolved base_branch. PR title:
+                   `Autofix: AI automated fixes by Harness`. Description must
+                   include:
+                      - A short summary of the root cause.
+                      - The specific files changed and why.
+                      - A reference to the resolved execution_id.
+
+                Safety rules:
+                - Respect branch-protection / required reviews — never bypass them.
+                - Do not auto-merge the PR. A human must approve.
+                - Never echo or log secret values, tokens, or credentials.

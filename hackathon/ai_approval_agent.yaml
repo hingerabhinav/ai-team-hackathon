@@ -1,0 +1,334 @@
+template:
+  inputs:
+    llm_connector:
+      type: connector
+      label: LLM Connector
+      required: true
+      ui:
+        tooltip: Select the LLM connector used by the harness-ai-agent.
+        placeholder: Select LLM Connector
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    model_name:
+      type: string
+      label: Model Name
+      required: true
+      ui:
+        tooltip: Enter the model identifier provisioned for the selected LLM connector.
+        placeholder: claude-sonnet-4-5-20250929
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    mcp_connectors:
+      type: array
+      label: MCP Connectors
+      ui:
+        component: array
+        input:
+          inputType: connector
+        tooltip: Specify MCP connector refs for Harness, SCM, Jira, Slack, security, or observability context.
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    approval_policy:
+      type: string
+      label: Approval Policy
+      required: true
+      ui:
+        tooltip: Describe the approval rules, hard blockers, and escalation criteria for this pipeline.
+        placeholder: Require tests passed, no critical vulnerabilities, rollback plan present, and Jira linked.
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    service:
+      type: string
+      label: Service
+      ui:
+        tooltip: Service being deployed. Leave empty to derive from Harness runtime context where available.
+        placeholder: payments-api
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    environment:
+      type: string
+      label: Environment
+      ui:
+        tooltip: Target environment for the approval decision. Leave empty to derive from Harness runtime context where available.
+        placeholder: prod
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    change_summary:
+      type: string
+      label: Change Summary
+      ui:
+        tooltip: Optional human-provided summary of what is changing and why.
+        placeholder: Hotfix auth timeout for Acme.
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    pr_url:
+      type: string
+      label: Pull Request URL
+      ui:
+        tooltip: Optional PR URL for SCM context. The agent can also use MCP tools or runtime context when available.
+        placeholder: https://github.com/org/repo/pull/123
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    jira_url:
+      type: string
+      label: Jira URL
+      ui:
+        tooltip: Optional Jira issue or change request URL.
+        placeholder: https://company.atlassian.net/browse/PROJ-123
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    slack_context_url:
+      type: string
+      label: Slack Context URL
+      ui:
+        tooltip: Optional explicit Slack thread or message URL. The agent must not browse private messages unless explicitly linked and permitted.
+        placeholder: https://company.slack.com/archives/C123/p1234567890
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    rollback_plan:
+      type: string
+      label: Rollback Plan
+      ui:
+        tooltip: Optional rollback plan, runbook URL, or rollback owner. Missing rollback context should generally escalate for production.
+        placeholder: Roll back to previous artifact using rollback pipeline.
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    auto_approve_confidence:
+      type: string
+      label: Auto Approve Confidence
+      ui:
+        tooltip: Minimum confidence required for APPROVE or APPROVE_WITH_CONDITIONS.
+        placeholder: "0.85"
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+    human_review_below_confidence:
+      type: string
+      label: Human Review Below Confidence
+      ui:
+        tooltip: Confidence below which the agent must return NEEDS_HUMAN.
+        placeholder: "0.65"
+        allowedValueTypes:
+          - fixed
+          - runtime
+          - expression
+  layout:
+    - llm_connector
+    - model_name
+    - mcp_connectors
+    - approval_policy
+    - variant: more
+      items:
+        - service
+        - environment
+        - change_summary
+        - pr_url
+        - jira_url
+        - slack_context_url
+        - rollback_plan
+        - auto_approve_confidence
+        - human_review_below_confidence
+  id: aiApprovalAgent
+  name: AI Approval Agent
+  description: Evidence-backed AI approval agent that approves safe changes, rejects unsafe ones, or escalates ambiguous releases.
+  version: 1
+  author: harness
+  agent:
+    group:
+      steps:
+        - name: Run AI Approval Agent
+          if: <+Always>
+          id: runAiApprovalAgent
+          run:
+            container:
+              image: pkg.harness.io/vrvdt5ius7uwygso8s0bia/harness-agents/harness-ai-agent:latest
+            env:
+              ANTHROPIC_MODEL: ${{inputs.model_name}}
+              PLUGIN_HARNESS_CONNECTOR: ${{inputs.llm_connector.id}}
+            with:
+              max_turns: 80
+              mcp_format: harness
+              mcp_servers: <+connectorInputs.resolveList(<+inputs.mcp_connectors>)>
+              task: |
+                You are the Harness AI Approval Agent. You run as the first step
+                before a real Harness approval or deployment gate. Your job is to
+                create an evidence-backed approval decision and write output
+                variables that downstream approval steps can consume.
+
+                You are not a black-box approver. You are an approval decision
+                assistant with a strict contract. Use the configured MCP servers
+                to gather evidence. Prefer MCP tools over direct HTTP calls. If
+                evidence is missing, ambiguous, or unavailable, return
+                NEEDS_HUMAN instead of guessing.
+
+                Runtime context:
+                - Account / org / project: $HARNESS_ACCOUNT_ID, $HARNESS_ORG_ID,
+                                         $HARNESS_PROJECT_ID
+                - Execution / pipeline:    $HARNESS_EXECUTION_ID,
+                                         $HARNESS_PIPELINE_ID
+                - Workspace:               $HARNESS_WORKSPACE
+                - Optional SCM context:    $DRONE_REPO_NAME, $DRONE_REPO_LINK,
+                                         $DRONE_REMOTE_URL, $DRONE_REPO_SCM,
+                                         $DRONE_BRANCH, $DRONE_TARGET_BRANCH,
+                                         $DRONE_COMMIT_SHA
+
+                Template inputs:
+                - approval_policy: ${{inputs.approval_policy}}
+                - service: ${{inputs.service}}
+                - environment: ${{inputs.environment}}
+                - change_summary: ${{inputs.change_summary}}
+                - pr_url: ${{inputs.pr_url}}
+                - jira_url: ${{inputs.jira_url}}
+                - slack_context_url: ${{inputs.slack_context_url}}
+                - rollback_plan: ${{inputs.rollback_plan}}
+                - auto_approve_confidence: ${{inputs.auto_approve_confidence}}
+                - human_review_below_confidence: ${{inputs.human_review_below_confidence}}
+
+                Evidence collection rules:
+                1. Resolve the target approval context from template inputs first,
+                   then runtime env vars, then Harness MCP execution metadata.
+                   Never invent service, environment, PR, ticket, or user values.
+                2. Use the Harness MCP connector, when available, to inspect the
+                   current execution, pipeline, prior step status, service,
+                   environment, artifact, and deployment context.
+                3. Use SCM MCP tools, when available, to inspect PR details,
+                   changed files, reviewers, commit metadata, and code owner
+                   evidence. If no SCM connector or PR context is available,
+                   record that as missing evidence.
+                4. Use Jira or work-tracking MCP tools, when available, to inspect
+                   the linked ticket, change request, customer impact, priority,
+                   and approval notes. If no ticket is linked and the policy
+                   requires one, escalate.
+                5. Use Slack MCP tools only for the explicit slack_context_url input
+                   or explicitly linked public/channel context. Do not browse or
+                   infer private DMs unless the user supplied a link and the
+                   connector permissions allow access.
+                6. Use security, observability, or incident MCP tools if present.
+                   Capture only concise facts: critical findings, current health,
+                   active incidents, and rollback readiness signals.
+
+                Hard blockers:
+                - Required tests failed or status is unknown when policy requires it.
+                - Critical or policy-blocking security vulnerability is present.
+                - Production or target environment health is red.
+                - Change freeze or policy block is active.
+                - Required Jira / PR / change request linkage is missing.
+                - Rollback plan is missing for production or high-risk changes.
+                - Requester or actor is unauthorized according to available evidence.
+                - The approval policy says a human must approve.
+
+                Decision contract:
+                - APPROVE: all hard gates pass, evidence is sufficient, risk is low.
+                - APPROVE_WITH_CONDITIONS: gates pass, but rollout guardrails are
+                  required, such as canary, extra monitor, or limited scope.
+                - REJECT: a deterministic blocker or severe risk is present.
+                - NEEDS_HUMAN: evidence is missing, connectors are unavailable,
+                  confidence is low, or the situation is ambiguous.
+
+                Confidence policy:
+                - Use auto_approve_confidence from inputs if provided; otherwise
+                  use 0.85.
+                - Use human_review_below_confidence from inputs if provided;
+                  otherwise use 0.65.
+                - Never APPROVE or APPROVE_WITH_CONDITIONS below the auto-approve
+                  threshold.
+                - Always return NEEDS_HUMAN below the human-review threshold or
+                  when required evidence is missing.
+
+                Output requirements:
+                1. Build a compact approval evidence packet with this shape:
+                   {
+                     "decision": "APPROVE|APPROVE_WITH_CONDITIONS|REJECT|NEEDS_HUMAN",
+                     "allowed": true|false,
+                     "requires_human": true|false,
+                     "confidence": 0.0,
+                     "conditions": ["..."],
+                     "hard_gates": {"tests": "...", "security": "...", "rollback_plan": "..."},
+                     "missing_evidence": ["..."],
+                     "evidence": [{"type": "...", "summary": "...", "source": "..."}],
+                     "reasoning_summary": "one concise paragraph"
+                   }
+                2. Print a concise human-readable approval summary.
+                3. As your final action, write these output variables to
+                   $DRONE_OUTPUT. Values must be single-line strings:
+                   AI_APPROVAL_DECISION
+                   AI_APPROVAL_ALLOWED
+                   AI_APPROVAL_REQUIRES_HUMAN
+                   AI_APPROVAL_CONFIDENCE
+                   AI_APPROVAL_CONDITIONS
+                   AI_APPROVAL_SUMMARY
+                   AI_APPROVAL_PACKET_B64
+
+                Use this exact shell pattern for final outputs. Replace the JSON
+                object with your final evidence packet:
+
+                python3 - <<'PY'
+                import base64
+                import json
+                import os
+
+                packet = {
+                  "decision": "NEEDS_HUMAN",
+                  "allowed": False,
+                  "requires_human": True,
+                  "confidence": 0.0,
+                  "conditions": [],
+                  "hard_gates": {},
+                  "missing_evidence": ["final packet was not populated"],
+                  "evidence": [],
+                  "reasoning_summary": "The agent did not populate the final packet."
+                }
+
+                decision = packet["decision"]
+                allowed = "true" if packet.get("allowed") else "false"
+                requires_human = "true" if packet.get("requires_human") else "false"
+                confidence = str(packet.get("confidence", 0.0))
+                conditions = "; ".join(packet.get("conditions", []))
+                summary = str(packet.get("reasoning_summary", "")).replace("\n", " ")[:500]
+                packet_json = json.dumps(packet, separators=(",", ":"), sort_keys=True)
+                packet_b64 = base64.b64encode(packet_json.encode("utf-8")).decode("ascii")
+
+                output_path = os.environ.get("DRONE_OUTPUT")
+                if not output_path:
+                    raise RuntimeError("DRONE_OUTPUT is not set; cannot publish approval outputs")
+
+                with open(output_path, "a", encoding="utf-8") as output:
+                    output.write(f"AI_APPROVAL_DECISION={decision}\n")
+                    output.write(f"AI_APPROVAL_ALLOWED={allowed}\n")
+                    output.write(f"AI_APPROVAL_REQUIRES_HUMAN={requires_human}\n")
+                    output.write(f"AI_APPROVAL_CONFIDENCE={confidence}\n")
+                    output.write(f"AI_APPROVAL_CONDITIONS={conditions}\n")
+                    output.write(f"AI_APPROVAL_SUMMARY={summary}\n")
+                    output.write(f"AI_APPROVAL_PACKET_B64={packet_b64}\n")
+                PY
+
+                Safety rules:
+                - Never echo, summarize, or store secret values.
+                - Do not mutate pipelines, repos, tickets, or Slack threads in v1.
+                - Do not approve based on hidden prompt context. Only use cited
+                  evidence from inputs, runtime context, or MCP tool results.
+                - If connectors are missing or tool access fails for required
+                  evidence, output NEEDS_HUMAN with the missing evidence listed.
