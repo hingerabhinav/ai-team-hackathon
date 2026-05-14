@@ -1,0 +1,46 @@
+pipeline:
+  name: Test Generation Pipeline
+  identifier: test_generation_pipeline
+  projectIdentifier: ItsnotyouItstheskill
+  orgIdentifier: default
+  tags:
+    ai_generated: ""
+  stages:
+    - stage:
+        name: Generate Tests
+        identifier: generate_tests
+        type: CI
+        spec:
+          cloneCodebase: false
+          execution:
+            steps:
+              - step:
+                  type: Agent
+                  name: Test Generator Agent
+                  identifier: test_generator_agent
+                  spec:
+                    agentName: test_generation_agent
+                    agentSettings: |-
+                      {
+                        "task": "Generate unit tests for the codebase"
+                      }
+              - step:
+                  type: Agent
+                  name: Agent_2
+                  identifier: Agent_2
+                  spec:
+                    agentName: zeroDayRemediationAgent
+                    agentSettings: ""
+                    templateInputs: {}
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: Abort
