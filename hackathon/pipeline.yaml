@@ -1,0 +1,136 @@
+pipeline:
+  projectIdentifier: ItsnotyouItstheskill
+  orgIdentifier: default
+  tags:
+    ai_generated: ""
+  stages:
+    - stage:
+        name: Agent Analysis
+        identifier: Agent_Analysis
+        description: AI Approval Agent gathers evidence and produces an approval decision
+        type: CI
+        spec:
+          cloneCodebase: false
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Agent
+                  name: AI Approval Agent
+                  identifier: AI_Approval_Agent
+                  spec:
+                    agentName: ai_approval
+                    agentSettings: ""
+                    llmConnector: connector_Anthropic_7581
+                contextType: Pipeline
+              - step:
+                  type: Run
+                  name: Slack Notify
+                  identifier: slack_notify
+                  timeout: 1m
+                  spec:
+                    shell: Bash
+                    command: |-
+                      DECISION="<+steps.ai_approval_agent.output.outputVariables.AI_APPROVAL_DECISION>"
+                      CONFIDENCE="<+steps.ai_approval_agent.output.outputVariables.AI_APPROVAL_CONFIDENCE>"
+                      SUMMARY="<+steps.ai_approval_agent.output.outputVariables.AI_APPROVAL_SUMMARY>"
+
+                      if [ "$DECISION" = "APPROVE" ]; then COLOR="good";
+                      elif [ "$DECISION" = "REJECT" ]; then COLOR="danger";
+                      else COLOR="warning"; fi
+
+                      curl -s -X POST -H 'Content-type: application/json' --data "{
+                        \"attachments\": [{
+                          \"color\": \"${COLOR}\",
+                          \"title\": \"AI Approval: ${DECISION} (confidence ${CONFIDENCE})\",
+                          \"text\": \"${SUMMARY}\",
+                          \"fields\": [
+                            {\"title\": \"Pipeline\", \"value\": \"<+pipeline.name>\", \"short\": true},
+                            {\"title\": \"Triggered by\", \"value\": \"<+pipeline.triggeredBy.email>\", \"short\": true}
+                          ]
+                        }]
+                      }" <+secrets.getValue("slack_webhook_url")>
+                  when:
+                    stageStatus: Success
+                    condition: "false"
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: MarkAsFailure
+    - stage:
+        name: Approval Gate
+        identifier: Approval_Gate
+        description: Auto-approves if agent says APPROVE, waits for human otherwise
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: HarnessApproval
+                  name: Conditional Approval
+                  identifier: Conditional_Approval
+                  timeout: 1d
+                  spec:
+                    approvalMessage: |-
+                      AI Agent Decision: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_DECISION>
+                      Confidence: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_CONFIDENCE>
+                      Summary: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_SUMMARY>
+                      Conditions: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_CONDITIONS>
+                    includePipelineExecutionHistory: true
+                    isAutoRejectEnabled: false
+                    approvers:
+                      userGroups:
+                        - account._account_all_users
+                      minimumCount: 1
+                      disallowPipelineExecutor: false
+                    approverInputs: []
+                  when:
+                    stageStatus: Success
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: MarkAsFailure
+        when:
+          pipelineStatus: Success
+          condition: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_DECISION> == "no"
+    - stage:
+        name: Deploy
+        identifier: Deploy
+        description: Proceeds only after approval gate passes
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: Deploy Service
+                  identifier: deploy_service
+                  timeout: 5m
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          echo "Deploying with AI Approval Agent evidence packet"
+                          echo "Decision: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_DECISION>"
+                          echo "Confidence: <+pipeline.stages.Agent_Analysis.spec.execution.steps.AI_Approval_Agent.steps.ai_approval_1.output.outputVariables.AI_APPROVAL_CONFIDENCE>"
+                          echo "Deployment proceeding..."
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: MarkAsFailure
+  identifier: AI_Approval_Agent_Pipeline_CloneHinger
+  name: AI Approval Agent Pipeline - CloneHinger

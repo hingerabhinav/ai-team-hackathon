@@ -1,0 +1,113 @@
+version: 1
+agent:
+  step:
+    run:
+      container:
+        image: pkg.harness.io/vrvdt5ius7uwygso8s0bia/harness-agents/harness-ai-agent:latest
+      with:
+        task: |
+          ## Goal
+
+          Determine whether the artifact version specified in `<+inputs.target_version>`
+          has already been **successfully deployed** to prod1, prod2, and prod3
+          environments for the given service. Return a clear safe / not-safe verdict.
+
+          ## Inputs
+
+          - `org_id`: <+inputs.target_org>
+          - `project_id`: <+inputs.target_project>
+          - `service`: <+inputs.service>
+          - `environments`: <+inputs.environment>
+          - `version`: <+inputs.version>
+
+          ## Steps
+
+          ### Step 1 — Fetch recent executions for the pipeline
+
+          Call `harness_list` with:
+          - `resource_type` = `execution`
+          - `org_id` = `<+inputs.target_org>`
+          - `project_id` = `<+inputs.target_project>`
+          - `filters` = `{ "pipeline_id": "Harness_CD_Canary_Pipeline_Latest", "status": "Success", "module": "CD" }`
+          - `size` = `100`
+
+          Paginate if needed to cover the last 30 days of executions.
+
+          ### Step 2 — Get details for each execution
+
+          For each successful execution returned in Step 1, call `harness_get` with:
+          - `resource_type` = `execution`
+          - `org_id` = `<+inputs.target_org>`
+          - `project_id` = `<+inputs.target_project>`
+          - `params` = `{ "execution_id": "<execution_id from Step 1>" }`
+
+          From each execution's details, extract:
+          - The **service** that was deployed
+          - The **environment** it was deployed to
+          - The **artifact version** (image tag / version string)
+
+          Keep only executions where:
+          - service matches `<+inputs.service>`
+          - environment is one of: `prod1`, `prod2`, or `prod3`
+
+          ### Step 3 — Compare versions
+
+          Check whether `<+inputs.version>` appears in any of the successful
+          prod executions found in Step 2.
+
+          ## Expected Output
+
+          Return a structured verdict:
+
+          **SAFE** — if `<+inputs.version>` has at least one successful
+          deployment in prod1, prod2, or prod3 for the service.
+
+          **NOT SAFE** — if no successful prod deployment exists for this version
+          and service combination.
+
+          Always include this summary table:
+
+          | Environment | Last Successful Version | Matches <+inputs.version>? |
+          |-------------|------------------------|-----------------------------------|
+          | prod1       | <version or "N/A">     | Yes / No                          |
+          | prod2       | <version or "N/A">     | Yes / No                          |
+          | prod3       | <version or "N/A">     | Yes / No                          |
+        max_turns: 150
+        mcp_format: harness
+        mcp_servers: <+connectorInputs.resolveList(<+inputs.mcpConnectors>)>
+      env:
+        HARNESS_SKIP_ELICITATION: "true"
+        PLUGIN_HARNESS_CONNECTOR: <+inputs.llmConnector.id>
+        ANTHROPIC_MODEL: <+inputs.modelName>
+  inputs:
+    llmConnector:
+      type: connector
+      required: true
+      default: connector_Anthropic_7581
+    modelName:
+      type: string
+      default: claude-sonnet-4-5-20250929
+    mcpConnectors:
+      type: array
+      default:
+        - Harness0_mcp
+      ui:
+        component: array
+        input:
+          inputType: connector
+    service:
+      type: string
+      required: true
+      default: genai-service
+    environment:
+      type: string
+      default: prod0
+    version:
+      type: string
+      default: 1.118.0
+    Targetorg:
+      type: string
+      default: Cloud_Infra
+    targetproject:
+      type: string
+      default: harnessinfra

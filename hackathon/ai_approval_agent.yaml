@@ -88,7 +88,7 @@ agent:
             required evidence is missing.
 
           Output requirements:
-          1. Build a compact approval evidence packet internally with this shape:
+          1. Build a compact approval evidence packet with this shape:
              {
                "decision": "APPROVE|APPROVE_WITH_CONDITIONS|REJECT|NEEDS_HUMAN",
                "allowed": true|false,
@@ -101,41 +101,57 @@ agent:
                "reasoning_summary": "one concise paragraph"
              }
           2. Print a concise human-readable approval summary.
-          3. As your final action, write these THREE output variables to $HARNESS_OUTPUT_FILE.
-             Format: KEY=value on each line. Values must be single-line strings.
+          3. As your final action, write these output variables to $DRONE_OUTPUT.
+             Values must be single-line strings:
+             AI_APPROVAL_DECISION
+             AI_APPROVAL_ALLOWED
+             AI_APPROVAL_REQUIRES_HUMAN
+             AI_APPROVAL_CONFIDENCE
+             AI_APPROVAL_CONDITIONS
+             AI_APPROVAL_SUMMARY
+             AI_APPROVAL_PACKET_B64
 
-             AI_APPROVAL_DECISION   - "yes" if human intervention is needed, "no" otherwise
-                                      (yes = NEEDS_HUMAN or REJECT; no = APPROVE or APPROVE_WITH_CONDITIONS)
-             AI_APPROVAL_CONFIDENCE - confidence score as decimal in (0,1) range, e.g. 0.87
-             AI_APPROVAL_SUMMARY    - one-line human-readable summary of the decision
-
-          Use this exact shell pattern for final outputs. Replace the values with
-          your final decision:
+          Use this exact shell pattern for final outputs. Replace the packet object
+          with your final evidence packet:
 
           python3 - <<'PY'
+          import base64
+          import json
           import os
 
-          # Replace these with your actual computed values
-          decision = "NEEDS_HUMAN"  # Your internal decision
-          confidence = 0.0          # Your confidence score
-          summary = "The agent did not populate the final packet."
+          packet = {
+            "decision": "NEEDS_HUMAN",
+            "allowed": False,
+            "requires_human": True,
+            "confidence": 0.0,
+            "conditions": [],
+            "hard_gates": {},
+            "missing_evidence": ["final packet was not populated"],
+            "evidence": [],
+            "reasoning_summary": "The agent did not populate the final packet."
+          }
 
-          # Map internal decision to yes/no for human intervention
-          # yes = human intervention needed (NEEDS_HUMAN or REJECT)
-          # no = can proceed without human (APPROVE or APPROVE_WITH_CONDITIONS)
-          needs_human = "yes" if decision in ("NEEDS_HUMAN", "REJECT") else "no"
+          decision = packet["decision"]
+          allowed = "true" if packet.get("allowed") else "false"
+          requires_human = "true" if packet.get("requires_human") else "false"
+          confidence = str(packet.get("confidence", 0.0))
+          conditions = "; ".join(packet.get("conditions", []))
+          summary = str(packet.get("reasoning_summary", "")).replace("\n", " ")[:500]
+          packet_json = json.dumps(packet, separators=(",", ":"), sort_keys=True)
+          packet_b64 = base64.b64encode(packet_json.encode("utf-8")).decode("ascii")
 
-          # Clean summary to single line
-          summary_clean = str(summary).replace("\n", " ").replace("\r", " ")[:500]
-
-          output_path = os.environ.get("HARNESS_OUTPUT_FILE")
+          output_path = os.environ.get("DRONE_OUTPUT")
           if not output_path:
-              raise RuntimeError("HARNESS_OUTPUT_FILE is not set; cannot publish approval outputs")
+              raise RuntimeError("DRONE_OUTPUT is not set; cannot publish approval outputs")
 
           with open(output_path, "a", encoding="utf-8") as output:
-              output.write(f"AI_APPROVAL_DECISION={needs_human}\n")
+              output.write(f"AI_APPROVAL_DECISION={decision}\n")
+              output.write(f"AI_APPROVAL_ALLOWED={allowed}\n")
+              output.write(f"AI_APPROVAL_REQUIRES_HUMAN={requires_human}\n")
               output.write(f"AI_APPROVAL_CONFIDENCE={confidence}\n")
-              output.write(f"AI_APPROVAL_SUMMARY={summary_clean}\n")
+              output.write(f"AI_APPROVAL_CONDITIONS={conditions}\n")
+              output.write(f"AI_APPROVAL_SUMMARY={summary}\n")
+              output.write(f"AI_APPROVAL_PACKET_B64={packet_b64}\n")
           PY
 
           Safety rules:
@@ -165,6 +181,7 @@ agent:
         - connector_Github_a34d
         - harnessmcpconnector
         - connector_Jira_6c17
+        - connector_Slack_d0b0
       ui:
         component: array
         input:
